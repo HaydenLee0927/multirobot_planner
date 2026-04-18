@@ -1,15 +1,14 @@
 /*=================================================================
  *
  * planner_multirobot.cpp
- * Multi-Robot Waste Collection - 16350 Project
- * Akshat Kumar, Hayden Lee
  *
- * World state mirrors proposal:
- *   S = {M, Z, T, R, t, t_total}
- *   Map M  : 2D grid, cell value = zone_id (0=free,1-3=zone) or -1=obstacle
- *   Zones Z: each zone has a trash generation rate
- *   Trash T: {x, y, zone_id, claimed_by_robot_id}
- *   Robots R: {x, y, target_trash_idx, path}
+ * World state mirrors proposal: (as shown in proposal slides)
+ * 
+ * S = {M, Z, T, R, t, t_total}
+ * Map M  : 2D grid, cell value = zone_id (0=free,1-3=zone) or -1=obstacle
+ * Zones Z: each zone has a trash generation rate
+ * Trash T: {x, y, zone_id, claimed_by_robot_id}
+ * Robots R: {x, y, target_trash_idx, path}
  *
  *=================================================================*/
 
@@ -35,11 +34,8 @@
 static const int dX[NUMOFDIRS] = {-1, -1, -1,  0,  0,  1, 1, 1};
 static const int dY[NUMOFDIRS] = {-1,  0,  1, -1,  1, -1, 0, 1};
 
-// ---------------------------------------------------------------------------
-// A* internal state (Trash and Robot structs live in planner_multirobot.h)
-// ---------------------------------------------------------------------------
 
-// Test: hi
+// State struct used for AStar search (for simplicity + backtracking)
 
 struct AStarState {
     int x, y;
@@ -58,9 +54,7 @@ struct CompareState {
     }
 };
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+// Helper fns
 
 static inline double euclidean(int x1, int y1, int x2, int y2) {
     return sqrt((double)(x1-x2)*(x1-x2) + (double)(y1-y2)*(y1-y2));
@@ -79,9 +73,8 @@ static bool cellFree(int* map, int collision_thresh, int x, int y, int xsize, in
     return map[GETMAPINDEX(x, y, xsize, ysize)] < collision_thresh;
 }
 
-// ---------------------------------------------------------------------------
-// A* from (sx,sy) to (gx,gy) — returns path excluding start, including goal
-// ---------------------------------------------------------------------------
+// A* from (sx,sy) to (gx,gy) 
+// returns path (start pos, goal_pos]
 
 static std::vector<std::pair<int,int>> astar(
     int* map, int collision_thresh, int xsize, int ysize,
@@ -151,12 +144,11 @@ static std::vector<std::pair<int,int>> astar(
     return path;
 }
 
-// ---------------------------------------------------------------------------
-// Target selection strategies
-// ---------------------------------------------------------------------------
+// Strategies
 
 /*
- * STRATEGY 1: Greedy nearest — pick unclaimed trash with min distance.
+ * Baseline: Greedy nearest — pick unclaimed trash with min distance.
+ * Doesn't care about what other robots do
  */
 static int selectTarget_Greedy(
     const Robot& robot,
@@ -175,9 +167,9 @@ static int selectTarget_Greedy(
 }
 
 /*
- * STRATEGY 2: Priority/Saturation weighted (A* target selection).
+ * STRATEGY 1: Priority/Saturation weighted (A* target selection).
  *
- * From proposal cost function:
+ * Cost function:
  *   score(T_i, robot_i, t, S) = alpha * p(z_I, t)
  *                              + beta  / (path_cost + 1)
  *                              + gamma * lambda_{z_I}
@@ -186,11 +178,12 @@ static int selectTarget_Greedy(
  * where sigma_i(z,t) = 1 + |{j != i | t_j != null && Z(t_j) == z}|
  *   (how many OTHER robots are already heading to that zone)
  *
- * Here we use a simplified version:
+ * Implementation of cost in this function:
  *   score = (alpha * zone_priority + beta / (dist+1) + gamma * zone_rate)
  *           / saturation
  *
  * Hyperparameters alpha, beta, gamma passed in from caller.
+ * TODO: OPTIMIZE alpha beta gamma
  */
 static int selectTarget_Priority(
     const Robot& robot,
@@ -211,7 +204,7 @@ static int selectTarget_Priority(
         double lambda_z = zone_rates[z - 1];       // generation rate
         double dist = euclidean(robot.x, robot.y, trash[i].x, trash[i].y);
 
-        // Saturation: count other robots targeting this zone
+        // Saturation/sigma calculation: other robots going to same zone
         int sigma = 1;
         for (int j = 0; j < (int)robots.size(); j++) {
             if (j == robot_id) continue;
@@ -228,9 +221,9 @@ static int selectTarget_Priority(
 }
 
 /*
- * STRATEGY 3: Unified graph search (placeholder — full implementation TBD).
+ * TODO
+ * STRATEGY 2: Unified graph search
  * Add a pseudo-goal node with cost = 1/value and run A* over (x,y,target) space.
- * For now falls back to Strategy 2.
  */
 static int selectTarget_Unified(
     const Robot& robot,
@@ -242,6 +235,8 @@ static int selectTarget_Unified(
 {
     // TODO: implement unified graph search over (x, y, target_id) state space
     // with pseudo-goal node addition (cost = 1/value as described in proposal)
+
+    // Just do strategy 1 for now
     return selectTarget_Priority(robot, trash, robots, zone_rates, robot_id,
                                   alpha, beta, gamma_);
 }
@@ -255,7 +250,7 @@ static int selectTarget_Unified(
  *
  * Inputs:
  *   map              : flattened 2D costmap (cell value = traversal cost)
- *   collision_thresh : cells >= this value are obstacles
+ *   collision_thresh : collision threshold
  *   x_size, y_size   : grid dimensions
  *   robots           : array of num_robots Robot structs (modified in place)
  *   num_robots       : number of robots
@@ -289,6 +284,7 @@ void planner_multirobot(
     std::vector<Trash>  trash(trash_arr, trash_arr + num_trash);
     std::vector<Robot>  robot_vec(robots, robots + num_robots);
 
+    // Plan for each robot
     for (int i = 0; i < num_robots; i++) {
         Robot& r = robot_vec[i];
 
