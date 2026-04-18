@@ -39,6 +39,8 @@ static const int dY[NUMOFDIRS] = {-1,  0,  1, -1,  1, -1, 0, 1};
 // A* internal state (Trash and Robot structs live in planner_multirobot.h)
 // ---------------------------------------------------------------------------
 
+// Test: hi
+
 struct AStarState {
     int x, y;
     int g;
